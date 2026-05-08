@@ -1,4 +1,4 @@
-name: Build APK Moely
+name: Build APK Moely Gemini UI
 
 on: workflow_dispatch
 
@@ -7,13 +7,10 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.19.6'  # Versi stabil, bukan 3.24
+          flutter-version: '3.19.6'
           channel: 'stable'
 
       - name: Create Flutter project
@@ -21,12 +18,12 @@ jobs:
           flutter create --org com.moely --project-name moely_app moely_app
           cd moely_app
 
-      - name: Setup pubspec.yaml
+      - name: Create pubspec.yaml
         run: |
           cd moely_app
           cat > pubspec.yaml << 'EOF'
           name: moely_app
-          description: Moely AI Chatbot
+          description: Moely AI Chatbot - Gemini UI Style
           version: 1.0.0+1
           environment:
             sdk: '>=3.0.0 <4.0.0'
@@ -35,14 +32,17 @@ jobs:
               sdk: flutter
             tflite_flutter: ^0.10.4
             permission_handler: ^10.4.3
+            image_picker: ^1.0.4
           dev_dependencies:
             flutter_test:
               sdk: flutter
           flutter:
             uses-material-design: true
+            assets:
+              - assets/icon.png
           EOF
 
-      - name: Setup main.dart
+      - name: Create main.dart (Gemini Style with Sidebar)
         run: |
           cd moely_app/lib
           cat > main.dart << 'EOF'
@@ -51,6 +51,7 @@ jobs:
           import 'package:flutter/material.dart';
           import 'package:tflite_flutter/tflite_flutter.dart';
           import 'package:permission_handler/permission_handler.dart';
+          import 'package:image_picker/image_picker.dart';
 
           void main() async {
             WidgetsFlutterBinding.ensureInitialized();
@@ -65,7 +66,10 @@ jobs:
               return MaterialApp(
                 title: 'Moely AI',
                 debugShowCheckedModeBanner: false,
-                theme: ThemeData.dark(),
+                theme: ThemeData.dark().copyWith(
+                  scaffoldBackgroundColor: Colors.black,
+                  appBarTheme: const AppBarTheme(backgroundColor: Colors.transparent, elevation: 0),
+                ),
                 home: const ChatScreen(),
               );
             }
@@ -82,8 +86,13 @@ jobs:
             Map<String, dynamic> _vocab = {};
             Map<String, String> _food = {};
             bool _loading = true;
+            bool _sidebarOpen = false;
             final TextEditingController _ctrl = TextEditingController();
             final List<Map<String, String>> _messages = [];
+
+            // Sidebar controllers
+            final TextEditingController _newKeyCtrl = TextEditingController();
+            final TextEditingController _newValueCtrl = TextEditingController();
 
             @override
             void initState() {
@@ -98,18 +107,18 @@ jobs:
                   await dir.create(recursive: true);
                   setState(() {
                     _loading = false;
-                    _messages.add({'bot': '📁 Folder Moely dibuat. Masukkan file:\n- model.tflite\n- vocab.json\n- makanan.json'});
+                    _messages.add({'bot': '✨ Hai! Aku Moely.\n\n📁 Folder Moely sudah dibuat.\n\nMasukkan file:\n• model.tflite\n• vocab.json\n• makanan.json (opsional)\n\nLalu restart aplikasi.'});
                   });
                   return;
                 }
-                final modelFile = File('${dir.path}/model.tflite');
-                final vocabFile = File('${dir.path}/vocab.json');
-                final foodFile = File('${dir.path}/makanan.json');
+                final modelFile = File('\${dir.path}/model.tflite');
+                final vocabFile = File('\${dir.path}/vocab.json');
+                final foodFile = File('\${dir.path}/makanan.json');
                 
                 if (!await modelFile.exists() || !await vocabFile.exists()) {
                   setState(() {
                     _loading = false;
-                    _messages.add({'bot': '❌ File model.tflite atau vocab.json tidak ditemukan di folder Moely.'});
+                    _messages.add({'bot': '⚠️ File model.tflite atau vocab.json tidak ditemukan.\n\nPastikan kedua file sudah ada di folder Moely.'});
                   });
                   return;
                 }
@@ -125,12 +134,12 @@ jobs:
                 
                 setState(() {
                   _loading = false;
-                  _messages.add({'bot': '✅ Moely siap! Silakan bertanya.'});
+                  _messages.add({'bot': '🌟 Halo! Aku Moely.\n\nTanya tentang apa saja, terutama makanan! Aku punya pengetahuan khusus yang bisa kamu tambahkan sendiri lewat menu 🍔.'});
                 });
               } catch (e) {
                 setState(() {
                   _loading = false;
-                  _messages.add({'bot': 'Error: $e'});
+                  _messages.add({'bot': '❌ Error: \$e'});
                 });
               }
             }
@@ -146,16 +155,20 @@ jobs:
                 
                 String lastChars = prompt.length >= seqLen ? prompt.substring(prompt.length - seqLen) : prompt.padLeft(seqLen, ' ');
                 List<int> ids = lastChars.split('').map((c) => char2idx[c] ?? 0).toList();
-                List<double> input = List.filled(seqLen * vocabSize, 0.0);
-                for (int i=0; i<seqLen; i++) {
-                  if (i < ids.length) input[i*vocabSize + ids[i]] = 1.0;
+                
+                int inputSize = seqLen * vocabSize;
+                List<double> input = List.filled(inputSize, 0.0);
+                for (int i = 0; i < seqLen && i < ids.length; i++) {
+                  int index = i * vocabSize + (ids[i] as int);
+                  if (index < inputSize) input[index] = 1.0;
                 }
+                
                 var output = List.filled(vocabSize, 0.0);
                 _interpreter!.run(input, output);
                 
                 int nextIdx = 0;
                 double maxVal = -1e9;
-                for (int i=0; i<output.length; i++) {
+                for (int i = 0; i < output.length; i++) {
                   if (output[i] > maxVal) { maxVal = output[i]; nextIdx = i; }
                 }
                 if (nextIdx < 0 || nextIdx >= idx2char.length) return "?";
@@ -163,6 +176,39 @@ jobs:
               } catch (e) {
                 return "?";
               }
+            }
+
+            Future<void> _saveFoodKnowledge() async {
+              final dir = Directory('/storage/emulated/0/Moely');
+              if (!await dir.exists()) await dir.create();
+              final foodFile = File('\${dir.path}/makanan.json');
+              await foodFile.writeAsString(json.encode(_food));
+              
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('✅ Pengetahuan makanan tersimpan!')),
+                );
+              }
+            }
+
+            void _addFoodKnowledge() {
+              String key = _newKeyCtrl.text.trim().toLowerCase();
+              String value = _newValueCtrl.text.trim();
+              if (key.isEmpty || value.isEmpty) return;
+              
+              setState(() {
+                _food[key] = value;
+                _newKeyCtrl.clear();
+                _newValueCtrl.clear();
+              });
+              _saveFoodKnowledge();
+            }
+
+            void _deleteFoodKnowledge(String key) {
+              setState(() {
+                _food.remove(key);
+              });
+              _saveFoodKnowledge();
             }
 
             void _send() async {
@@ -184,14 +230,14 @@ jobs:
               if (ans == null) {
                 String result = "";
                 String context = q;
-                for (int i=0; i<30; i++) {
+                for (int i = 0; i < 40; i++) {
                   String next = _generate(context);
                   if (next == "\n" || next == "" || next == "?") break;
                   result += next;
-                  if (result.length > 100) break;
-                  context = (context + next).length > 50 ? (context + next).substring((context+next).length-50) : context+next;
+                  if (result.length > 150) break;
+                  context = (context + next).length > 60 ? (context + next).substring((context+next).length-60) : context + next;
                 }
-                ans = result.trim().isEmpty ? "Maaf kurang paham." : result;
+                ans = result.trim().isEmpty ? "Maaf, saya kurang paham pertanyaanmu. Coba tanya tentang makanan atau tambahkan pengetahuan melalui menu 🍔." : result;
               }
               setState(() => _messages.add({'bot': ans!}));
             }
@@ -199,57 +245,217 @@ jobs:
             @override
             Widget build(BuildContext context) {
               return Scaffold(
-                appBar: AppBar(title: const Text('Moely AI'), backgroundColor: Colors.black),
-                body: _loading
-                    ? const Center(child: CircularProgressIndicator())
-                    : Column(children: [
-                        Expanded(
-                          child: ListView.builder(
-                            padding: const EdgeInsets.all(8),
-                            itemCount: _messages.length,
-                            itemBuilder: (ctx, i) {
-                              bool isUser = _messages[i].containsKey('user');
-                              return Align(
-                                alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-                                child: Container(
-                                  margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                                  decoration: BoxDecoration(
-                                    color: isUser ? Colors.blueAccent : Colors.grey[800],
-                                    borderRadius: BorderRadius.circular(20),
-                                  ),
-                                  child: Text(_messages[i][isUser ? 'user' : 'bot']!),
-                                ),
-                              );
-                            },
-                          ),
+                appBar: AppBar(
+                  title: Row(
+                    children: [
+                      Container(
+                        width: 32, height: 32,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(colors: [Colors.cyan, Colors.blue]),
+                          borderRadius: BorderRadius.circular(16),
                         ),
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(color: Colors.grey[900], borderRadius: BorderRadius.circular(30)),
-                          margin: const EdgeInsets.all(8),
-                          child: Row(children: [
-                            Expanded(
-                              child: TextField(
-                                controller: _ctrl,
-                                style: const TextStyle(color: Colors.white),
-                                decoration: const InputDecoration(hintText: 'Ketik...', border: InputBorder.none),
-                                onSubmitted: (_) => _send(),
+                        child: const Center(child: Text('M', style: TextStyle(fontWeight: FontWeight.bold))),
+                      ),
+                      const SizedBox(width: 10),
+                      const Text('Moely AI', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  actions: [
+                    IconButton(
+                      icon: const Icon(Icons.menu_book, color: Colors.white70),
+                      onPressed: () {
+                        setState(() => _sidebarOpen = !_sidebarOpen);
+                      },
+                      tooltip: 'Pengetahuan Makanan',
+                    ),
+                  ],
+                ),
+                body: _loading
+                    ? const Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                        CircularProgressIndicator(),
+                        SizedBox(height: 20),
+                        Text('Memuat Moely...', style: TextStyle(color: Colors.white70)),
+                      ]))
+                    : Row(
+                        children: [
+                          // MAIN CHAT AREA
+                          Expanded(
+                            child: Column(children: [
+                              Expanded(
+                                child: ListView.builder(
+                                  padding: const EdgeInsets.all(16),
+                                  itemCount: _messages.length,
+                                  itemBuilder: (ctx, i) {
+                                    bool isUser = _messages[i].containsKey('user');
+                                    return Align(
+                                      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+                                      child: Container(
+                                        margin: const EdgeInsets.symmetric(vertical: 6),
+                                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                                        decoration: BoxDecoration(
+                                          gradient: isUser
+                                              ? LinearGradient(colors: [Colors.blue.shade700, Colors.blue.shade900])
+                                              : const LinearGradient(colors: [Color(0xFF1E1E1E), Color(0xFF2A2A2A)]),
+                                          borderRadius: BorderRadius.circular(24),
+                                        ),
+                                        child: Text(
+                                          _messages[i][isUser ? 'user' : 'bot']!,
+                                          style: TextStyle(color: isUser ? Colors.white : Colors.white70),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
                               ),
-                            ),
-                            IconButton(icon: const Icon(Icons.send, color: Colors.cyanAccent), onPressed: _send),
-                          ]),
-                        )
-                      ]),
+                              // Input area seperti Gemini
+                              Container(
+                                margin: const EdgeInsets.all(12),
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF1E1E1E),
+                                  borderRadius: BorderRadius.circular(30),
+                                  border: Border.all(color: Colors.grey.shade800),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: TextField(
+                                        controller: _ctrl,
+                                        style: const TextStyle(color: Colors.white),
+                                        decoration: const InputDecoration(
+                                          hintText: 'Tanya Moely...',
+                                          hintStyle: TextStyle(color: Colors.grey),
+                                          border: InputBorder.none,
+                                        ),
+                                        onSubmitted: (_) => _send(),
+                                      ),
+                                    ),
+                                    Container(
+                                      decoration: BoxDecoration(
+                                        gradient: LinearGradient(colors: [Colors.cyan, Colors.blue]),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: IconButton(
+                                        icon: const Icon(Icons.arrow_upward, color: Colors.white, size: 20),
+                                        onPressed: _send,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ]),
+                          ),
+                          // SIDEBAR KNOWLEDGE
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 300),
+                            width: _sidebarOpen ? MediaQuery.of(context).size.width * 0.7 : 0,
+                            color: const Color(0xFF1A1A1A),
+                            child: _sidebarOpen
+                                ? Column(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.all(16),
+                                        decoration: BoxDecoration(
+                                          border: Border(bottom: BorderSide(color: Colors.grey.shade800)),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            const Icon(Icons.restaurant_menu, color: Colors.cyanAccent),
+                                            const SizedBox(width: 10),
+                                            const Text('Pengetahuan Makanan', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                                            const Spacer(),
+                                            IconButton(
+                                              icon: const Icon(Icons.close, color: Colors.white70),
+                                              onPressed: () => setState(() => _sidebarOpen = false),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      // Form tambah knowledge
+                                      Padding(
+                                        padding: const EdgeInsets.all(12),
+                                        child: Column(
+                                          children: [
+                                            TextField(
+                                              controller: _newKeyCtrl,
+                                              style: const TextStyle(color: Colors.white),
+                                              decoration: const InputDecoration(
+                                                labelText: 'Kata kunci (contoh: nasi goreng)',
+                                                labelStyle: TextStyle(color: Colors.grey),
+                                                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
+                                                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.cyan)),
+                                              ),
+                                            ),
+                                            const SizedBox(height: 10),
+                                            TextField(
+                                              controller: _newValueCtrl,
+                                              style: const TextStyle(color: Colors.white),
+                                              maxLines: 3,
+                                              decoration: const InputDecoration(
+                                                labelText: 'Jawaban / deskripsi',
+                                                labelStyle: TextStyle(color: Colors.grey),
+                                                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
+                                                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.cyan)),
+                                              ),
+                                            ),
+                                            const SizedBox(height: 10),
+                                            ElevatedButton.icon(
+                                              onPressed: _addFoodKnowledge,
+                                              icon: const Icon(Icons.add),
+                                              label: const Text('Tambah Pengetahuan'),
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: Colors.cyan,
+                                                minimumSize: const Size(double.infinity, 45),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const Divider(color: Colors.grey),
+                                      // List knowledge
+                                      Expanded(
+                                        child: ListView.builder(
+                                          itemCount: _food.length,
+                                          itemBuilder: (ctx, i) {
+                                            String key = _food.keys.elementAt(i);
+                                            return ListTile(
+                                              leading: const Icon(Icons.fastfood, color: Colors.cyanAccent),
+                                              title: Text(key, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                              subtitle: Text(_food[key]!, maxLines: 2, overflow: TextOverflow.ellipsis),
+                                              trailing: IconButton(
+                                                icon: const Icon(Icons.delete, color: Colors.red),
+                                                onPressed: () => _deleteFoodKnowledge(key),
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                      if (_food.isEmpty)
+                                        const Padding(
+                                          padding: EdgeInsets.all(20),
+                                          child: Text('Belum ada pengetahuan. Tambahkan kata kunci makanan dan jawabannya.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+                                        ),
+                                    ],
+                                  )
+                                : null,
+                          ),
+                        ],
+                      ),
               );
             }
           }
           EOF
 
-      - name: Update Android manifest for storage permission
+      - name: Add storage permission to AndroidManifest
         run: |
           cd moely_app/android/app/src/main
           sed -i 's/<application/<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"\/>\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"\/>\n    <application/' AndroidManifest.xml
+
+      - name: Update minSdk to 21
+        run: |
+          cd moely_app/android/app
+          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/' build.gradle
+          sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 33/' build.gradle
 
       - name: Get dependencies
         run: |
@@ -264,5 +470,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Moely-APK
+          name: Moely-Gemini-UI
           path: moely_app/build/app/outputs/flutter-apk/*.apk
