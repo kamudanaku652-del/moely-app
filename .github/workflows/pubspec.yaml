@@ -6,9 +6,6 @@ dependencies:
   flutter:
     sdk: flutter
   tflite_flutter: ^0.11.0
+  permission_handler: ^11.0.0
 flutter:
   uses-material-design: true
-  assets:
-    - assets/model.tflite
-    - assets/vocab.json
-    - assets/makanan.json
