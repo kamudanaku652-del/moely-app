@@ -5,36 +5,47 @@ on: workflow_dispatch
 jobs:
   build:
     runs-on: ubuntu-latest
+    
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.0'
+          flutter-version: '3.19.6'  # Versi stabil, bukan 3.24
+          channel: 'stable'
 
-      - name: Buat project Flutter
+      - name: Create Flutter project
         run: |
-          flutter create moely_app
+          flutter create --org com.moely --project-name moely_app moely_app
           cd moely_app
 
-      - name: Tulis pubspec.yaml
+      - name: Setup pubspec.yaml
         run: |
-          cat > moely_app/pubspec.yaml << 'EOF'
+          cd moely_app
+          cat > pubspec.yaml << 'EOF'
           name: moely_app
+          description: Moely AI Chatbot
           version: 1.0.0+1
           environment:
-            sdk: ">=3.0.0 <4.0.0"
+            sdk: '>=3.0.0 <4.0.0'
           dependencies:
             flutter:
               sdk: flutter
-            tflite_flutter: ^0.11.0
-            permission_handler: ^11.0.0
+            tflite_flutter: ^0.10.4
+            permission_handler: ^10.4.3
+          dev_dependencies:
+            flutter_test:
+              sdk: flutter
           flutter:
             uses-material-design: true
           EOF
 
-      - name: Tulis main.dart
+      - name: Setup main.dart
         run: |
-          cat > moely_app/lib/main.dart << 'EOF'
+          cd moely_app/lib
+          cat > main.dart << 'EOF'
           import 'dart:convert';
           import 'dart:io';
           import 'package:flutter/material.dart';
@@ -44,27 +55,29 @@ jobs:
           void main() async {
             WidgetsFlutterBinding.ensureInitialized();
             await [Permission.storage].request();
-            runApp(MoelyApp());
+            runApp(const MoelyApp());
           }
 
           class MoelyApp extends StatelessWidget {
+            const MoelyApp({super.key});
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
                 title: 'Moely AI',
                 debugShowCheckedModeBanner: false,
                 theme: ThemeData.dark(),
-                home: ChatScreen(),
+                home: const ChatScreen(),
               );
             }
           }
 
           class ChatScreen extends StatefulWidget {
+            const ChatScreen({super.key});
             @override
-            _ChatScreenState createState() => _ChatScreenState();
+            ChatScreenState createState() => ChatScreenState();
           }
 
-          class _ChatScreenState extends State<ChatScreen> {
+          class ChatScreenState extends State<ChatScreen> {
             Interpreter? _interpreter;
             Map<String, dynamic> _vocab = {};
             Map<String, String> _food = {};
@@ -85,7 +98,7 @@ jobs:
                   await dir.create(recursive: true);
                   setState(() {
                     _loading = false;
-                    _messages.add({'bot': '📁 Folder Moely dibuat. Masukkan model.tflite, vocab.json, dan makanan.json ke folder itu.'});
+                    _messages.add({'bot': '📁 Folder Moely dibuat. Masukkan file:\n- model.tflite\n- vocab.json\n- makanan.json'});
                   });
                   return;
                 }
@@ -96,7 +109,7 @@ jobs:
                 if (!await modelFile.exists() || !await vocabFile.exists()) {
                   setState(() {
                     _loading = false;
-                    _messages.add({'bot': '❌ File model/vocab tidak ditemukan di folder Moely.'});
+                    _messages.add({'bot': '❌ File model.tflite atau vocab.json tidak ditemukan di folder Moely.'});
                   });
                   return;
                 }
@@ -112,7 +125,7 @@ jobs:
                 
                 setState(() {
                   _loading = false;
-                  _messages.add({'bot': '✅ Moely siap! Tanya makanan.'});
+                  _messages.add({'bot': '✅ Moely siap! Silakan bertanya.'});
                 });
               } catch (e) {
                 setState(() {
@@ -124,26 +137,32 @@ jobs:
 
             String _generate(String prompt) {
               if (_interpreter == null) return "Model error";
-              final char2idx = Map<String,int>.from(_vocab['char2idx'] ?? {});
-              final idx2char = List<String>.from(_vocab['idx2char'] ?? []);
-              final vocabSize = _vocab['vocab_size'] ?? 0;
-              final seqLen = _vocab['seq_length'] ?? 5;
-              if (char2idx.isEmpty) return "?";
-              
-              String lastChars = prompt.length >= seqLen ? prompt.substring(prompt.length - seqLen) : prompt.padLeft(seqLen, ' ');
-              List<int> ids = lastChars.split('').map((c) => char2idx[c] ?? 0).toList();
-              List<double> input = List.filled(seqLen * vocabSize, 0.0);
-              for (int i=0; i<seqLen; i++) input[i*vocabSize + ids[i]] = 1.0;
-              var output = List.filled(vocabSize, 0.0);
-              _interpreter!.run(input, output);
-              
-              int nextIdx = 0;
-              double maxVal = -1e9;
-              for (int i=0; i<output.length; i++) {
-                if (output[i] > maxVal) { maxVal = output[i]; nextIdx = i; }
+              try {
+                final char2idx = Map<String,int>.from(_vocab['char2idx'] ?? {});
+                final idx2char = List<String>.from(_vocab['idx2char'] ?? []);
+                final vocabSize = _vocab['vocab_size'] ?? 0;
+                final seqLen = _vocab['seq_length'] ?? 5;
+                if (char2idx.isEmpty || idx2char.isEmpty) return "?";
+                
+                String lastChars = prompt.length >= seqLen ? prompt.substring(prompt.length - seqLen) : prompt.padLeft(seqLen, ' ');
+                List<int> ids = lastChars.split('').map((c) => char2idx[c] ?? 0).toList();
+                List<double> input = List.filled(seqLen * vocabSize, 0.0);
+                for (int i=0; i<seqLen; i++) {
+                  if (i < ids.length) input[i*vocabSize + ids[i]] = 1.0;
+                }
+                var output = List.filled(vocabSize, 0.0);
+                _interpreter!.run(input, output);
+                
+                int nextIdx = 0;
+                double maxVal = -1e9;
+                for (int i=0; i<output.length; i++) {
+                  if (output[i] > maxVal) { maxVal = output[i]; nextIdx = i; }
+                }
+                if (nextIdx < 0 || nextIdx >= idx2char.length) return "?";
+                return idx2char[nextIdx];
+              } catch (e) {
+                return "?";
               }
-              if (nextIdx >= idx2char.length) return "?";
-              return idx2char[nextIdx];
             }
 
             void _send() async {
@@ -165,11 +184,12 @@ jobs:
               if (ans == null) {
                 String result = "";
                 String context = q;
-                for (int i=0; i<40; i++) {
+                for (int i=0; i<30; i++) {
                   String next = _generate(context);
                   if (next == "\n" || next == "" || next == "?") break;
                   result += next;
-                  context = (context + next).length > 60 ? (context + next).substring((context+next).length-60) : context+next;
+                  if (result.length > 100) break;
+                  context = (context + next).length > 50 ? (context + next).substring((context+next).length-50) : context+next;
                 }
                 ans = result.trim().isEmpty ? "Maaf kurang paham." : result;
               }
@@ -179,36 +199,45 @@ jobs:
             @override
             Widget build(BuildContext context) {
               return Scaffold(
-                appBar: AppBar(title: Text('Moely AI'), backgroundColor: Colors.black),
+                appBar: AppBar(title: const Text('Moely AI'), backgroundColor: Colors.black),
                 body: _loading
-                    ? Center(child: CircularProgressIndicator())
+                    ? const Center(child: CircularProgressIndicator())
                     : Column(children: [
-                        Expanded(child: ListView.builder(
-                          padding: EdgeInsets.all(8),
-                          itemCount: _messages.length,
-                          itemBuilder: (ctx, i) {
-                            bool isUser = _messages[i].containsKey('user');
-                            return Align(
-                              alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-                              child: Container(
-                                margin: EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-                                padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                                decoration: BoxDecoration(
-                                  color: isUser ? Colors.blueAccent : Colors.grey[800],
-                                  borderRadius: BorderRadius.circular(20),
+                        Expanded(
+                          child: ListView.builder(
+                            padding: const EdgeInsets.all(8),
+                            itemCount: _messages.length,
+                            itemBuilder: (ctx, i) {
+                              bool isUser = _messages[i].containsKey('user');
+                              return Align(
+                                alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+                                child: Container(
+                                  margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                  decoration: BoxDecoration(
+                                    color: isUser ? Colors.blueAccent : Colors.grey[800],
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(_messages[i][isUser ? 'user' : 'bot']!),
                                 ),
-                                child: Text(_messages[i][isUser ? 'user' : 'bot']!),
-                              ),
-                            );
-                          },
-                        )),
+                              );
+                            },
+                          ),
+                        ),
                         Container(
-                          padding: EdgeInsets.all(8),
+                          padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(color: Colors.grey[900], borderRadius: BorderRadius.circular(30)),
-                          margin: EdgeInsets.all(8),
+                          margin: const EdgeInsets.all(8),
                           child: Row(children: [
-                            Expanded(child: TextField(controller: _ctrl, style: TextStyle(color: Colors.white), decoration: InputDecoration(hintText: 'Ketik...', border: InputBorder.none), onSubmitted: (_) => _send())),
-                            IconButton(icon: Icon(Icons.send, color: Colors.cyanAccent), onPressed: _send),
+                            Expanded(
+                              child: TextField(
+                                controller: _ctrl,
+                                style: const TextStyle(color: Colors.white),
+                                decoration: const InputDecoration(hintText: 'Ketik...', border: InputBorder.none),
+                                onSubmitted: (_) => _send(),
+                              ),
+                            ),
+                            IconButton(icon: const Icon(Icons.send, color: Colors.cyanAccent), onPressed: _send),
                           ]),
                         )
                       ]),
@@ -217,7 +246,12 @@ jobs:
           }
           EOF
 
-      - name: Install dependencies
+      - name: Update Android manifest for storage permission
+        run: |
+          cd moely_app/android/app/src/main
+          sed -i 's/<application/<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"\/>\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"\/>\n    <application/' AndroidManifest.xml
+
+      - name: Get dependencies
         run: |
           cd moely_app
           flutter pub get
